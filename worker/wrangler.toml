@@ -1,0 +1,12 @@
+name = "fuja-rag-agent"
+main = "src/index.js"
+compatibility_date = "2026-03-20"
+
+[vars]
+# Upstream AI Search endpoint. Can be private API or public URL.
+AI_SEARCH_API_URL = "https://f0188af7-469d-4797-bb41-30ecf536c06a.search.ai.cloudflare.com/chat/completions"
+AI_SEARCH_AUTH_HEADER = "Authorization"
+AI_SEARCH_TIMEOUT_MS = "60000"
+
+[observability]
+enabled = true

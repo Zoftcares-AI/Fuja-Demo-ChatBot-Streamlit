@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -10,6 +11,8 @@ class CloudflareAgentClient:
         self.api_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
         self.account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
         self.auth_header = os.getenv("CLOUDFLARE_AUTH_HEADER", "Authorization").strip()
+        self.cf_access_client_id = os.getenv("CF_ACCESS_CLIENT_ID", "").strip()
+        self.cf_access_client_secret = os.getenv("CF_ACCESS_CLIENT_SECRET", "").strip()
 
     def validate_config(self) -> Tuple[bool, str]:
         if not self.agent_url:
@@ -28,6 +31,9 @@ class CloudflareAgentClient:
             "Content-Type": "application/json",
             self.auth_header: f"Bearer {self.api_token}",
         }
+        if self.cf_access_client_id and self.cf_access_client_secret:
+            headers["CF-Access-Client-Id"] = self.cf_access_client_id
+            headers["CF-Access-Client-Secret"] = self.cf_access_client_secret
 
         payload: Dict[str, Any] = {
             "query": user_query,
@@ -43,8 +49,35 @@ class CloudflareAgentClient:
             json=payload,
             timeout=timeout_seconds,
         )
-        response.raise_for_status()
-        data = response.json()
+        if not response.ok:
+            # Bubble up backend JSON details instead of generic 502 only.
+            content_type = response.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                err = response.json()
+                upstream_status = err.get("upstream_status")
+                upstream_errors = err.get("upstream_errors")
+                upstream_body = err.get("upstream_body")
+                details = [f"Backend error {response.status_code}: {err.get('error', err)}"]
+                if upstream_status:
+                    details.append(f"upstream_status={upstream_status}")
+                if upstream_errors:
+                    details.append(f"upstream_errors={upstream_errors}")
+                if upstream_body:
+                    details.append(f"upstream_body={str(upstream_body)[:500]}")
+                raise RuntimeError(
+                    " | ".join(details)
+                )
+            raise RuntimeError(
+                f"Backend error {response.status_code}: {response.text[:500]}"
+            )
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"Backend returned non-JSON response (status {response.status_code}): "
+                f"{response.text[:500]}"
+            )
 
         # Normalize common response shapes from custom worker/agent APIs.
         answer = (
