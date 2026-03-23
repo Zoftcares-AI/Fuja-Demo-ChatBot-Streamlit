@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Dict, List
 
 import streamlit as st
@@ -16,79 +17,66 @@ st.set_page_config(
     menu_items={"Get help": None, "Report a bug": None, "About": None},
 )
 
-# Hide sidebar completely; tighten default padding for a cleaner chat app
 st.markdown(
     """
     <style>
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="collapsedControl"] { display: none !important; }
-    .block-container { padding-top: 0.75rem; padding-bottom: 2rem; max-width: 48rem; }
+    .block-container { padding-top: 0.9rem; padding-bottom: 1.8rem; max-width: 48rem; }
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
     header[data-testid="stHeader"] { background: transparent; }
-    .fuja-topbar {
-        position: sticky;
-        top: 0;
-        z-index: 10;
-        background: rgba(255, 255, 255, 0.86);
-        backdrop-filter: blur(8px);
+    .fuja-header {
+        margin-bottom: 0.95rem;
         border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 0.8rem 1rem;
-        margin-bottom: 1rem;
+        border-radius: 16px;
+        background: #f9fafb;
+        padding: 1rem 1.1rem;
     }
-    .fuja-topbar-inner {
+    .fuja-header-inner {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 0.75rem;
+        gap: 0.8rem;
     }
-    .fuja-header {
-        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    }
+    .fuja-head-copy { min-width: 0; }
     .fuja-title {
-        font-size: 1.1rem;
-        font-weight: 600;
-        letter-spacing: -0.02em;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 1.12rem;
+        font-weight: 620;
+        letter-spacing: -0.01em;
         color: #111827;
         margin: 0;
     }
-    .fuja-sub {
-        font-size: 0.78rem;
+    .fuja-subtitle {
+        margin: 0.22rem 0 0 0;
         color: #6b7280;
-        margin-top: 0.1rem;
+        font-size: 0.87rem;
     }
     .fuja-status {
-        font-size: 0.8rem;
-        color: #4b5563;
         display: inline-flex;
         align-items: center;
-        gap: 0.35rem;
+        gap: 0.4rem;
+        color: #374151;
+        font-size: 0.92rem;
+        white-space: nowrap;
     }
     .fuja-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 99px;
-        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
         background: #10b981;
-        box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+        box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
     }
     .fuja-dot.offline {
         background: #ef4444;
-        box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
-    }
-    .fuja-empty {
-        border: 1px dashed #d1d5db;
-        border-radius: 12px;
-        padding: 1rem;
-        margin: 0.25rem 0 1rem;
-        background: #fcfcfd;
+        box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
     }
     div[data-testid="stChatMessage"] {
-        background-color: #f9fafb;
-        border: 1px solid #f3f4f6;
+        background-color: #f8fafc;
+        border: 1px solid #edf2f7;
         border-radius: 12px;
-        padding: 0.75rem 1rem;
+        padding: 0.75rem 0.95rem;
         margin-bottom: 0.75rem;
     }
     .ref-card {
@@ -108,32 +96,34 @@ st.markdown(
 client = CloudflareAgentClient()
 is_valid, _ = client.validate_config()
 
-top_l, top_r = st.columns([0.75, 0.25])
-with top_l:
-    status_html = (
-        "<span class='fuja-dot'></span>Connected"
-        if is_valid
-        else "<span class='fuja-dot offline'></span>Config needed"
-    )
+if "stream_speed" not in st.session_state:
+    st.session_state.stream_speed = "Normal"
+
+status_dot_class = "fuja-dot" if is_valid else "fuja-dot offline"
+status_label = "Connected" if is_valid else "Config needed"
+header_l, header_r = st.columns([0.72, 0.28], vertical_alignment="bottom")
+with header_l:
     st.markdown(
         f"""
-        <div class="fuja-topbar">
-            <div class="fuja-topbar-inner">
-                <div class="fuja-header">
+        <div class="fuja-header">
+            <div class="fuja-header-inner">
+                <div class="fuja-head-copy">
                     <p class="fuja-title">FUJA Assistant</p>
-                    <p class="fuja-sub">Answers from your knowledge base</p>
+                    <p class="fuja-subtitle">Answers from your knowledge base</p>
                 </div>
-                <div class="fuja-status">{status_html}</div>
+                <div class="fuja-status"><span class="{status_dot_class}"></span>{status_label}</div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-with top_r:
-    st.markdown("<div style='height:0.34rem'></div>", unsafe_allow_html=True)
-    if st.button("New conversation", use_container_width=True, type="secondary"):
-        st.session_state.messages = []
-        st.rerun()
+with header_r:
+    st.selectbox(
+        "Stream speed",
+        options=["Fast", "Normal", "Slow"],
+        key="stream_speed",
+        label_visibility="visible",
+    )
 
 if not is_valid:
     st.warning(
@@ -155,6 +145,15 @@ def render_sources(sources: List[str]) -> None:
             st.markdown(f"<div class='ref-card'>{source}</div>", unsafe_allow_html=True)
 
 
+def stream_text(text: str):
+    speed_map = {"Fast": 0.0, "Normal": 0.015, "Slow": 0.04}
+    delay = speed_map.get(st.session_state.get("stream_speed", "Normal"), 0.015)
+    for word in text.split():
+        yield word + " "
+        if delay > 0:
+            time.sleep(delay)
+
+
 def run_assistant_query(prompt: str) -> None:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -166,41 +165,22 @@ def run_assistant_query(prompt: str) -> None:
         return
 
     with st.chat_message("assistant"):
-        with st.spinner("Working…"):
-            try:
-                result = client.ask(prompt, chat_history=to_history(st.session_state.messages))
-                answer = result["answer"] or "No response from the assistant."
-                sources = result.get("sources", [])
-                st.markdown(answer)
-                if sources:
-                    render_sources(sources)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer, "sources": sources}
-                )
-            except Exception as exc:
-                st.error(f"Something went wrong: {exc}")
-
-
-if not st.session_state.messages:
-    st.markdown(
-        """
-        <div class="fuja-empty">
-            <strong>Start with a common query</strong><br/>
-            <span style="color:#6b7280;font-size:0.9rem;">Pick a prompt or type your own question below.</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        if st.button("Admission process", use_container_width=True):
-            run_assistant_query("What is the admission process?")
-    with p2:
-        if st.button("Fees structure", use_container_width=True):
-            run_assistant_query("Can you explain the current fees structure?")
-    with p3:
-        if st.button("Scholarships", use_container_width=True):
-            run_assistant_query("What scholarships are available?")
+        try:
+            status_placeholder = st.empty()
+            status_placeholder.caption("Working....")
+            result = client.ask(prompt, chat_history=to_history(st.session_state.messages))
+            answer = result["answer"] or "No response from the assistant."
+            sources = result.get("sources", [])
+            status_placeholder.empty()
+            streamed = st.write_stream(stream_text(answer))
+            if sources:
+                render_sources(sources)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": streamed, "sources": sources}
+            )
+        except Exception as exc:
+            status_placeholder.empty()
+            st.error(f"Something went wrong: {exc}")
 
 
 for m in st.session_state.messages:
