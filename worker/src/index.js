@@ -148,6 +148,27 @@ export default {
 
       const upstreamData = await upstreamResponse.json();
       const normalized = normalizeUpstreamResponse(upstreamData);
+      const resultPayload = upstreamData?.result ?? upstreamData;
+      const matches =
+        resultPayload?.matches ?? resultPayload?.retrieval?.matches ?? [];
+      const hasMatches = Array.isArray(matches) && matches.length > 0;
+      const hasSources =
+        Array.isArray(normalized.sources) && normalized.sources.length > 0;
+
+      // Guardrail: if retrieval does not return evidence, do not answer broadly.
+      if (!hasMatches && !hasSources) {
+        return jsonResponse(
+          {
+            answer:
+              "I’m sorry, I don’t have information about that right now. You can ask me about topics related to this service, and I’ll be happy to help.",
+            sources: [],
+            raw: { guardrail: "no-matches" },
+          },
+          200,
+          corsHeaders,
+        );
+      }
+
       return jsonResponse(
         {
           answer: normalized.answer || "No answer returned by AI Search.",
