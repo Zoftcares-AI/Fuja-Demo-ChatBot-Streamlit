@@ -151,16 +151,18 @@ export default {
       const resultPayload = upstreamData?.result ?? upstreamData;
       const matches =
         resultPayload?.matches ?? resultPayload?.retrieval?.matches ?? [];
+      const chunks = resultPayload?.chunks ?? upstreamData?.chunks ?? [];
       const hasMatches = Array.isArray(matches) && matches.length > 0;
       const hasSources =
         Array.isArray(normalized.sources) && normalized.sources.length > 0;
+      const hasChunks = Array.isArray(chunks) && chunks.length > 0;
 
       // Guardrail: if retrieval does not return evidence, do not answer broadly.
-      if (!hasMatches && !hasSources) {
+      if (!hasMatches && !hasSources && !hasChunks) {
         return jsonResponse(
           {
             answer:
-              "I’m sorry, I don’t have information about that right now. You can ask me about topics related to this service, and I’ll be happy to help.",
+              "I’m sorry, I don’t have information about that right now. You can ask me about topics related to Fujaira Academy Services, and I’ll be happy to help.",
             sources: [],
             raw: { guardrail: "no-matches" },
           },
