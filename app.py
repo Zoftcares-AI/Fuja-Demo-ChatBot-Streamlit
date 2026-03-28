@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from typing import Dict, List
 
@@ -88,6 +89,14 @@ st.markdown(
         font-size: 0.84rem;
         color: #374151;
     }
+    div[data-testid="stChatMessage"] ul, div[data-testid="stChatMessage"] ol {
+        margin: 0.35rem 0 0.5rem 0;
+        padding-left: 1.25rem;
+    }
+    div[data-testid="stChatMessage"] li { margin: 0.25rem 0; line-height: 1.45; }
+    div[data-testid="stChatMessage"] li > ul, div[data-testid="stChatMessage"] li > ol {
+        margin-top: 0.25rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -108,8 +117,8 @@ with header_l:
         <div class="fuja-header">
             <div class="fuja-header-inner">
                 <div class="fuja-head-copy">
-                    <p class="fuja-title">FUJA Assistant</p>
-                    <p class="fuja-subtitle">Answers from your knowledge base</p>
+                    <p class="fuja-title">FUJAA AVIATION ACADEMY AI ASSISTANT</p>
+                    <p class="fuja-subtitle">Official information about our programs and services</p>
                 </div>
                 <div class="fuja-status"><span class="{status_dot_class}"></span>{status_label}</div>
             </div>
@@ -145,13 +154,58 @@ def render_sources(sources: List[str]) -> None:
             st.markdown(f"<div class='ref-card'>{source}</div>", unsafe_allow_html=True)
 
 
-def stream_text(text: str):
-    speed_map = {"Fast": 0.0, "Normal": 0.015, "Slow": 0.04}
-    delay = speed_map.get(st.session_state.get("stream_speed", "Normal"), 0.015)
-    for word in text.split():
-        yield word + " "
-        if delay > 0:
-            time.sleep(delay)
+def format_assistant_markdown(text: str) -> str:
+    """Turn model text that crams * / - list markers into valid Markdown lists."""
+    if not text or not str(text).strip():
+        return text or ""
+    t = str(text).strip()
+    # "including: * **Item**" -> blank line before first bullet
+    t = re.sub(r"([:：])\s+\*\s+", r"\1\n\n* ", t)
+    # "text * **Next section**" -> new top-level bullet (bold headings)
+    t = re.sub(r"(?<!\n)\s+\*\s+(\*\*)", r"\n\n* \1", t)
+    # Sub-bullets after a bold heading line: ":** - Pilot"
+    t = re.sub(r"(\*\*[^*]+\*\*:[^\n]*?)\s+-\s+", r"\1\n  - ", t)
+    t = re.sub(r"(?<!\n)\s+-\s+(?=\*\*|[A-Za-z(])", r"\n  - ", t)
+    # Closing paragraph stuck to list: ") They offer" / "). Something"
+    t = re.sub(r"\)\s+([A-Z])", r")\n\n\1", t)
+    t = re.sub(r"([.!?])\s+([A-Z][a-z]+\s+(offer|also|additionally|finally)\b)", r"\1\n\n\2", t)
+    # Separate LLM follow-ups from the main answer (ChatGPT-style section break)
+    t = re.sub(
+        r"(?i)(?<!\n---\n)\n*\s*(\*\*?\s*You might also ask\s*\*?\s*:?)",
+        r"\n\n---\n\n\1",
+        t,
+    )
+    t = re.sub(
+        r"(?i)(?<!\n---\n)\n*\s*(\*\*?\s*Related questions\s*\*?\s*:?)",
+        r"\n\n---\n\n\1",
+        t,
+    )
+    # Collapse excessive blank lines
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def stream_markdown_reveal(container, text: str, speed: str) -> None:
+    """Reveal markdown in small chunks so Normal/Slow feel visibly different."""
+    if not text:
+        container.markdown("")
+        return
+    if speed == "Fast":
+        container.markdown(text)
+        return
+    # Line-only streaming felt instant for short answers (often 1 line).
+    if speed == "Slow":
+        chunk_size, delay = 3, 0.055
+    else:
+        chunk_size, delay = 10, 0.028
+    n = len(text)
+    if n == 0:
+        return
+    pos = 0
+    while pos < n:
+        pos = min(pos + chunk_size, n)
+        container.markdown(text[:pos])
+        time.sleep(delay)
 
 
 def run_assistant_query(prompt: str) -> None:
@@ -172,11 +226,14 @@ def run_assistant_query(prompt: str) -> None:
             answer = result["answer"] or "No response from the assistant."
             sources = result.get("sources", [])
             status_placeholder.empty()
-            streamed = st.write_stream(stream_text(answer))
+            formatted = format_assistant_markdown(answer)
+            box = st.empty()
+            speed = st.session_state.get("stream_speed", "Normal")
+            stream_markdown_reveal(box, formatted, speed)
             if sources:
                 render_sources(sources)
             st.session_state.messages.append(
-                {"role": "assistant", "content": streamed, "sources": sources}
+                {"role": "assistant", "content": answer, "sources": sources}
             )
         except Exception as exc:
             status_placeholder.empty()
@@ -185,10 +242,12 @@ def run_assistant_query(prompt: str) -> None:
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+        if m["role"] == "assistant":
+            st.markdown(format_assistant_markdown(m["content"]))
+        else:
+            st.markdown(m["content"])
         if m.get("sources"):
             render_sources(m["sources"])
-
 
 prompt = st.chat_input("Message…")
 if prompt:

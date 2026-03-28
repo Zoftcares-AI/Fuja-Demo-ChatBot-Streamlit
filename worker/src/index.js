@@ -2,6 +2,36 @@ function jsonResponse(payload, status, headers) {
   return new Response(JSON.stringify(payload), { status, headers });
 }
 
+/** Remove RAG/meta phrasing so end users never hear about uploads, context, or KB. */
+function polishAssistantTone(text) {
+  if (!text || typeof text !== "string") return text;
+  let t = text;
+  const patterns = [
+    [/\bI have information now because you provided documents related to\b/gi, "Here is information about"],
+    [/\bbecause you provided documents related to\b/gi, "about"],
+    [/\byou provided documents related to\b/gi, "about"],
+    [/\byou provided (the )?documents?\b/gi, ""],
+    [/\bdocuments? (that |which )?you (uploaded|provided|shared)\b/gi, ""],
+    [/\b(according to |based on )?the provided context\b/gi, ""],
+    [/\busing the provided context\b/gi, ""],
+    [/\bfrom the provided context\b/gi, ""],
+    [/\bin the provided context\b/gi, ""],
+    [/\bthe (retrieved |)context (shows|says|indicates)\b/gi, ""],
+    [/\bfrom (your |the )(uploaded |)files?\b/gi, ""],
+    [/\bfrom the knowledge base\b/gi, ""],
+    [/\bthe knowledge base\b/gi, ""],
+    [/\bI can now answer your questions using the provided context\.?\s*/gi, ""],
+    [/\busing the (available |)information I have\b/gi, "based on what I know about our services"],
+    [/\bto confirm, you would like to know more about\b/gi, "Would you like to know more about"],
+  ];
+  for (const [re, rep] of patterns) {
+    t = t.replace(re, rep);
+  }
+  t = t.replace(/\s{2,}/g, " ").replace(/\s+([.,!?])/g, "$1").trim();
+  t = t.replace(/^[,.;]\s*/g, "").trim();
+  return t;
+}
+
 function normalizeUpstreamResponse(data) {
   const result = data?.result ?? data;
   const answer =
@@ -17,18 +47,71 @@ function normalizeUpstreamResponse(data) {
   return { answer, sources, raw: data };
 }
 
-function isGreeting(query) {
-  const normalized = query.toLowerCase().trim();
-  return [
+function normalizeCasualQuery(query) {
+  return query
+    .toLowerCase()
+    .trim()
+    .replace(/[!?.。！？]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/** Short auto-replies for greetings / thanks / bye — skips RAG so users never see out-of-scope. */
+function getCasualAutoReply(query) {
+  const t = normalizeCasualQuery(query);
+  const qt = query.trim();
+  if (["thanks", "thank you", "thx", "ty"].includes(t)) {
+    return "You’re welcome! If you have more questions about Fujairah Aviation Academy, I’m happy to help.";
+  }
+  if (["bye", "goodbye", "see you"].includes(t)) {
+    return "Take care! Come back anytime if you need help with our programs or services.";
+  }
+  if (/^شكرا|^شكرًا|^مع السلامة\b/i.test(qt)) {
+    return "على الرحب والسعداء! إذا كان لديك المزيد من الأسئلة حول أكاديمية الفجيرة للطيران، أنا هنا للمساعدة.";
+  }
+  if (/^السلام عليكم|^مرحبا|^مرحبًا|^اهلا|^أهلا\b/i.test(qt)) {
+    return "مرحبًا! كيف يمكنني مساعدتك اليوم فيما يتعلق بأكاديمية الفجيرة للطيران؟";
+  }
+  const greet = new Set([
     "hi",
     "hello",
     "hey",
     "hii",
     "yo",
+    "sup",
     "good morning",
     "good afternoon",
     "good evening",
-  ].includes(normalized);
+    "good night",
+    "how are you",
+    "how r u",
+    "how're you",
+    "how is it going",
+    "how's it going",
+    "whats up",
+    "what's up",
+    "ok",
+    "okay",
+  ]);
+  if (greet.has(t)) {
+    return "Hello! I’m doing well, thank you. How can I help you today with Fujairah Aviation Academy—programs, exams, or bookings?";
+  }
+  return null;
+}
+
+/** Ensure the latest user turn is present once (client often sends it both as `query` and last message). */
+function finalizeMessages(messages, query) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  const q = String(query ?? "").trim();
+  const last = list[list.length - 1];
+  if (
+    q &&
+    (!last ||
+      last.role !== "user" ||
+      String(last.content ?? "").trim() !== q)
+  ) {
+    list.push({ role: "user", content: q });
+  }
+  return list;
 }
 
 export default {
@@ -66,11 +149,11 @@ export default {
     if (!query) {
       return jsonResponse({ error: "Missing required field: query" }, 400, corsHeaders);
     }
-    if (isGreeting(query)) {
+    const casual = getCasualAutoReply(query);
+    if (casual) {
       return jsonResponse(
         {
-          answer:
-            "Hello! How can I help you today? Ask me anything about your indexed knowledge base.",
+          answer: casual,
           sources: [],
           raw: { fast_path: true },
         },
@@ -106,18 +189,19 @@ export default {
         requestOptions.headers[upstreamAuthHeader] = `Bearer ${upstreamToken}`;
       }
 
-      // Attempt 1: direct AI Search query shape.
+      const msgs = finalizeMessages(messages, query);
+
+      // Prefer full `messages` first so short replies (e.g. "yes") keep prior assistant context.
+      // Some AI Search setups weight `query` heavily and behave like single-turn if sent first.
       let upstreamResponse = await fetch(upstreamUrl, {
         ...requestOptions,
-        body: JSON.stringify({ query, messages }),
+        body: JSON.stringify({ messages: msgs }),
       });
 
-      // Attempt 2: chat completions shape if query format is rejected.
       if (!upstreamResponse.ok && upstreamResponse.status === 400) {
-        const combinedMessages = [...messages, { role: "user", content: query }];
         upstreamResponse = await fetch(upstreamUrl, {
           ...requestOptions,
-          body: JSON.stringify({ messages: combinedMessages }),
+          body: JSON.stringify({ query, messages: msgs }),
         });
       }
 
@@ -162,7 +246,7 @@ export default {
         return jsonResponse(
           {
             answer:
-              "I’m sorry, I don’t have information about that right now. You can ask me about topics related to Fujaira Academy Services, and I’ll be happy to help.",
+              "I’m sorry, I don’t have information about that right now. You can ask me about topics related to Fujairah Aviation Academy (FUJA), and I’ll be happy to help.",
             sources: [],
             raw: { guardrail: "no-matches" },
           },
@@ -171,9 +255,12 @@ export default {
         );
       }
 
+      const answerText = polishAssistantTone(
+        normalized.answer || "No answer returned by AI Search.",
+      );
       return jsonResponse(
         {
-          answer: normalized.answer || "No answer returned by AI Search.",
+          answer: answerText,
           sources: Array.isArray(normalized.sources) ? normalized.sources : [],
           raw: normalized.raw,
         },
