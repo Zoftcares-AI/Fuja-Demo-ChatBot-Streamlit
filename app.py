@@ -180,6 +180,21 @@ def format_assistant_markdown(text: str) -> str:
         r"\n\n---\n\n\1",
         t,
     )
+    t = re.sub(
+        r"(?<!\n---\n)\n*\s*(\*\*?\s*قد تسأل أيضًا\s*\*?\s*:?)",
+        r"\n\n---\n\n\1",
+        t,
+    )
+    t = re.sub(
+        r"(?i)(?<!\n---\n)\n*\s*(\*\*?\s*Want to go deeper\??\s*\*?\s*:?)",
+        r"\n\n---\n\n\1",
+        t,
+    )
+    t = re.sub(
+        r"(?<!\n---\n)\n*\s*(\*\*?\s*هل تود معرفة المزيد؟\s*\*?\s*:?)",
+        r"\n\n---\n\n\1",
+        t,
+    )
     # Collapse excessive blank lines
     t = re.sub(r"\n{3,}", "\n\n", t)
     return t.strip()
@@ -206,6 +221,9 @@ def stream_markdown_reveal(container, text: str, speed: str) -> None:
         pos = min(pos + chunk_size, n)
         container.markdown(text[:pos])
         time.sleep(delay)
+    # One final write avoids ghost/duplicate blocks inside st.chat_message (Streamlit
+    # sometimes leaves prior incremental markdown visible alongside the latest delta).
+    container.markdown(text)
 
 
 def run_assistant_query(prompt: str) -> None:
@@ -220,23 +238,23 @@ def run_assistant_query(prompt: str) -> None:
 
     with st.chat_message("assistant"):
         try:
-            status_placeholder = st.empty()
-            status_placeholder.caption("Working....")
+            # Single empty slot for caption + answer avoids stacked fragments in chat bubbles.
+            reply_slot = st.empty()
+            reply_slot.caption("Working....")
             result = client.ask(prompt, chat_history=to_history(st.session_state.messages))
             answer = result["answer"] or "No response from the assistant."
             sources = result.get("sources", [])
-            status_placeholder.empty()
+            reply_slot.empty()
             formatted = format_assistant_markdown(answer)
-            box = st.empty()
             speed = st.session_state.get("stream_speed", "Normal")
-            stream_markdown_reveal(box, formatted, speed)
+            stream_markdown_reveal(reply_slot, formatted, speed)
             if sources:
                 render_sources(sources)
             st.session_state.messages.append(
                 {"role": "assistant", "content": answer, "sources": sources}
             )
         except Exception as exc:
-            status_placeholder.empty()
+            reply_slot.empty()
             st.error(f"Something went wrong: {exc}")
 
 

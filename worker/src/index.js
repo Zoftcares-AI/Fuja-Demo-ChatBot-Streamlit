@@ -89,8 +89,6 @@ function getCasualAutoReply(query) {
     "how's it going",
     "whats up",
     "what's up",
-    "ok",
-    "okay",
   ]);
   if (greet.has(t)) {
     return "Hello! I’m doing well, thank you. How can I help you today with Fujairah Aviation Academy—programs, exams, or bookings?";
@@ -112,6 +110,31 @@ function finalizeMessages(messages, query) {
     list.push({ role: "user", content: q });
   }
   return list;
+}
+
+/**
+ * Short prepend only: thread continuity. Full policy (grounding, voice, follow-ups, refusals) lives in
+ * Cloudflare AI Search system instructions—avoid duplicating or contradicting them here.
+ */
+const FUJA_ASSISTANT_SYSTEM_PROMPT = `
+THREADING: Use the full chat history. If the user sends a short reply (yes, no, sure, please, نعم, لا, طبعًا), interpret it from your immediately previous assistant message—especially questions you asked or offers you made. Continue helpfully; do not ask what they meant when your prior turn clearly invited a next step.
+
+Follow your primary application system instructions for grounding, public voice, refusals, and the exact follow-up block format (heading, language, and number of questions).
+`.trim();
+
+function withSystemPrompt(messages) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  const core = FUJA_ASSISTANT_SYSTEM_PROMPT;
+  if (!list.length) return [{ role: "system", content: core }];
+  if (list[0]?.role === "system") {
+    const existing = String(list[0].content ?? "").trim();
+    list[0] = {
+      role: "system",
+      content: existing ? `${core}\n\n---\n\n${existing}` : core,
+    };
+    return list;
+  }
+  return [{ role: "system", content: core }, ...list];
 }
 
 export default {
@@ -189,7 +212,7 @@ export default {
         requestOptions.headers[upstreamAuthHeader] = `Bearer ${upstreamToken}`;
       }
 
-      const msgs = finalizeMessages(messages, query);
+      const msgs = withSystemPrompt(finalizeMessages(messages, query));
 
       // Prefer full `messages` first so short replies (e.g. "yes") keep prior assistant context.
       // Some AI Search setups weight `query` heavily and behave like single-turn if sent first.
