@@ -9,29 +9,14 @@ export function stripMarkdownForSpeech(text: string): string {
   return t.slice(0, 8000);
 }
 
-const AR_SCRIPT = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+export type VoiceUiLang = "en" | "ar";
 
 /**
- * Pick en vs ar for TTS when UI is Auto (no extra npm deps).
- * Uses Arabic script range; Latin-only text is spoken as English.
+ * Web Speech API `lang` for the mic session.
  */
-export function detectLangEnAr(text: string): "en" | "ar" {
-  const plain = stripMarkdownForSpeech(text);
-  if (!plain) return "en";
-  return AR_SCRIPT.test(plain) ? "ar" : "en";
+export function recognitionLangForMode(mode: VoiceUiLang): string {
+  return mode === "ar" ? "ar-SA" : "en-US";
 }
-
-/** Web Speech API recognition language for UI mode (auto uses browser locale hint). */
-export function recognitionLangForMode(mode: "en" | "ar" | "auto"): string {
-  if (mode === "ar") return "ar-SA";
-  if (mode === "en") return "en-US";
-  if (typeof navigator !== "undefined" && navigator.language?.toLowerCase().startsWith("ar")) {
-    return "ar-SA";
-  }
-  return "en-US";
-}
-
-export type VoiceUiLang = "en" | "ar" | "auto";
 
 export function speechRecognitionCtor(): SpeechRecognitionConstructor | null {
   if (typeof window === "undefined") return null;
@@ -46,9 +31,24 @@ export function isSpeechSynthesisSupported(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+/** Cleared when a new utterance is scheduled so stale voice-load callbacks never speak. */
+let voiceLoadTimer: ReturnType<typeof setTimeout> | null = null;
+/** Bumped on cancel and on each new speak so async voice-load callbacks never speak after interrupt. */
+let speakGeneration = 0;
+
 export function cancelSpeech(): void {
+  if (typeof window !== "undefined") {
+    speakGeneration += 1;
+  }
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.cancel();
+  }
+  if (typeof window !== "undefined" && voiceLoadTimer !== null) {
+    window.clearTimeout(voiceLoadTimer);
+    voiceLoadTimer = null;
+  }
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = null;
   }
 }
 
@@ -73,38 +73,76 @@ function pickVoiceForLang(resolved: "en" | "ar"): SpeechSynthesisVoice | null {
   return ranked[0] ?? null;
 }
 
-let voicesWarmed = false;
+/** Blocks duplicate speak for the same chat turn (Strict Mode / effect double-run). */
+let lastSpeakTurnIndex = -1;
+let lastSpeakTurnAt = 0;
+let lastSpeakContentSig = "";
+
+/** Run cb once when voices are ready. Deduplicates `onvoiceschanged` vs fallback timeout (both used to fire = double speech). */
 function ensureVoicesLoaded(cb: () => void): void {
   if (typeof window === "undefined") return;
   const synth = window.speechSynthesis;
-  if (synth.getVoices().length) {
+  if (voiceLoadTimer !== null) {
+    window.clearTimeout(voiceLoadTimer);
+    voiceLoadTimer = null;
+  }
+  synth.onvoiceschanged = null;
+
+  if (synth.getVoices().length > 0) {
     cb();
     return;
   }
-  if (!voicesWarmed) {
-    voicesWarmed = true;
-    synth.onvoiceschanged = () => {
-      cb();
-      synth.onvoiceschanged = null;
-    };
-  }
-  window.setTimeout(cb, 120);
+  let done = false;
+  const runOnce = () => {
+    if (done) return;
+    done = true;
+    if (voiceLoadTimer !== null) {
+      window.clearTimeout(voiceLoadTimer);
+      voiceLoadTimer = null;
+    }
+    synth.onvoiceschanged = null;
+    cb();
+  };
+  synth.onvoiceschanged = runOnce;
+  voiceLoadTimer = window.setTimeout(runOnce, 300);
 }
 
-export function speakText(text: string, lang: VoiceUiLang): void {
+export function speakText(text: string, lang: VoiceUiLang, messageCount?: number): void {
   if (!isSpeechSynthesisSupported()) return;
   const plain = stripMarkdownForSpeech(text);
   if (!plain) return;
-  const resolved = lang === "auto" ? detectLangEnAr(text) : lang;
-  window.speechSynthesis.cancel();
+  const resolved = lang;
+
+  const contentSig = `${messageCount ?? 0}:${plain.slice(0, 160)}`;
+  if (typeof messageCount === "number" && messageCount > 0) {
+    const now = Date.now();
+    if (
+      messageCount === lastSpeakTurnIndex &&
+      contentSig === lastSpeakContentSig &&
+      now - lastSpeakTurnAt < 5000
+    ) {
+      return;
+    }
+    lastSpeakTurnIndex = messageCount;
+    lastSpeakTurnAt = now;
+    lastSpeakContentSig = contentSig;
+  }
+
+  cancelSpeech();
+  const gen = ++speakGeneration;
+  let didEnqueueUtterance = false;
 
   const run = () => {
+    if (gen !== speakGeneration) return;
+    if (didEnqueueUtterance) return;
+    didEnqueueUtterance = true;
     const u = new SpeechSynthesisUtterance(plain);
     u.lang = resolved === "ar" ? "ar-SA" : "en-US";
     u.rate = resolved === "ar" ? 0.98 : 0.96;
     u.pitch = 1;
     const v = pickVoiceForLang(resolved);
     if (v) u.voice = v;
+    if (gen !== speakGeneration) return;
     window.speechSynthesis.speak(u);
   };
 

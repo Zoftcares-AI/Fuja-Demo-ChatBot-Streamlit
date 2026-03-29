@@ -73,6 +73,15 @@ function getCasualAutoReply(query, priorUserTurns) {
   if (/^شكرا|^شكرًا|^مع السلامة\b/i.test(qt)) {
     return "على الرحب والسعداء! إذا احتجت أي معلومات أخرى عن أكاديمية الفجيرة للطيران، أنا هنا.";
   }
+  /** Latin / romanized Arabic greetings from speech-to-text (e.g. "marhaba", "salam"). */
+  const latinArabicGreeting =
+    /^(?:um+|uh+|oh+|okay|ok|yes|yeah)?\s*(marhaba|marhaban|marhabaa|merhaba|murhaba|mrhaba|salam|salaam|assalam|assalamu|as-?salamu|ahlan(?:\s+wa\s+sahlan)?|sabah\s+alkhayr|sabah\s+alkheir|masa\s+alkhayr)(?:\s+(?:hello|hi|hey|there|friend|today|please))?\s*$/i;
+  if (latinArabicGreeting.test(t)) {
+    if (firstTurn) {
+      return "مرحبًا! يسعدني مساعدتك. كيف يمكنني أن أدعمك اليوم فيما يتعلق بأكاديمية الفجيرة للطيران؟";
+    }
+    return "مرحبًا. كيف يمكنني المساعدة بخصوص أكاديمية الفجيرة للطيران؟";
+  }
   if (/^السلام عليكم|^مرحبا|^مرحبًا|^اهلا|^أهلا\b/i.test(qt)) {
     if (firstTurn) {
       return "مرحبًا! يسعدني مساعدتك. كيف يمكنني أن أدعمك اليوم فيما يتعلق بأكاديمية الفجيرة للطيران؟";

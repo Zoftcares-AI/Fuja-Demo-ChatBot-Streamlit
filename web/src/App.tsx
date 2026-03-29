@@ -34,17 +34,22 @@ export default function App() {
   const [animateNextAssistant, setAnimateNextAssistant] = useState(false);
   const [voiceIn, setVoiceIn] = useState(false);
   const [voiceOut, setVoiceOut] = useState(false);
-  const [speechMode, setSpeechMode] = useState<VoiceUiLang>("auto");
+  const [speechMode, setSpeechMode] = useState<VoiceUiLang>("en");
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const recRef = useRef<SpeechRecognition | null>(null);
   const voiceChunksRef = useRef<string[]>([]);
+  const lastInterimRef = useRef("");
   const listeningIntentRef = useRef(false);
-  const lastSpokenKey = useRef<string>("");
+  const voiceStopRequestedRef = useRef(false);
   const sendLockRef = useRef(false);
   const messagesRef = useRef<ChatTurn[]>(messages);
   messagesRef.current = messages;
+  const speechModeRef = useRef<VoiceUiLang>(speechMode);
+  speechModeRef.current = speechMode;
+  const voiceOutRef = useRef(voiceOut);
+  voiceOutRef.current = voiceOut;
 
   useEffect(() => {
     fetchHealth()
@@ -66,6 +71,7 @@ export default function App() {
     return () => {
       cancelSpeech();
       listeningIntentRef.current = false;
+      voiceStopRequestedRef.current = false;
       try {
         recRef.current?.abort();
       } catch {
@@ -92,14 +98,15 @@ export default function App() {
         setWorking(true);
 
         if (!configured) {
-          setMessages((m) => [
-            ...m,
-            {
-              role: "assistant",
-              content:
-                "This deployment is not fully configured. Add `CLOUDFLARE_AGENT_URL` and `CLOUDFLARE_API_TOKEN` to your Vercel project environment (or use `vercel dev` with `.env.local`), then redeploy.",
-            },
-          ]);
+          const cfgMsg =
+            "This deployment is not fully configured. Add `CLOUDFLARE_AGENT_URL` and `CLOUDFLARE_API_TOKEN` to your Vercel project environment (or use `vercel dev` with `.env.local`), then redeploy.";
+          setMessages((m) => {
+            const next: ChatTurn[] = [...m, { role: "assistant", content: cfgMsg }];
+            queueMicrotask(() => {
+              if (voiceOutRef.current) speakText(cfgMsg, speechModeRef.current, next.length);
+            });
+            return next;
+          });
           return;
         }
 
@@ -113,7 +120,13 @@ export default function App() {
           const answer = pickAnswer(data) || "No response from the assistant.";
           const sources = pickSources(data);
           setAnimateNextAssistant(true);
-          setMessages((m) => [...m, { role: "assistant", content: answer, sources }]);
+          setMessages((m) => {
+            const next: ChatTurn[] = [...m, { role: "assistant", content: answer, sources }];
+            queueMicrotask(() => {
+              if (voiceOutRef.current) speakText(answer, speechModeRef.current, next.length);
+            });
+            return next;
+          });
         } catch (err: unknown) {
           const e = err as Error & { data?: ChatResponse };
           const d = e.data;
@@ -123,13 +136,14 @@ export default function App() {
               ? ` ${d.detail}`
               : "";
           setError(`${e.message || "Request failed"}${detail}`);
-          setMessages((m) => [
-            ...m,
-            {
-              role: "assistant",
-              content: `Something went wrong: ${e.message || "Unknown error"}`,
-            },
-          ]);
+          const errMsg = `Something went wrong: ${e.message || "Unknown error"}`;
+          setMessages((m) => {
+            const next: ChatTurn[] = [...m, { role: "assistant", content: errMsg }];
+            queueMicrotask(() => {
+              if (voiceOutRef.current) speakText(errMsg, speechModeRef.current, next.length);
+            });
+            return next;
+          });
           setAnimateNextAssistant(false);
         }
       } finally {
@@ -140,63 +154,65 @@ export default function App() {
     [configured],
   );
 
-  useEffect(() => {
-    if (!voiceOut || messages.length === 0) return;
-    const last = messages[messages.length - 1];
-    if (last.role !== "assistant") return;
-    const key = `${messages.length}-${last.content.length}-${last.content.slice(0, 40)}`;
-    if (lastSpokenKey.current === key) return;
-    lastSpokenKey.current = key;
-    speakText(last.content, speechMode);
-  }, [messages, voiceOut, speechMode]);
-
-  /** Tap mic → speak (continuous); tap again → stop and send full transcript. */
+  /** Tap mic → speak (continuous); tap again → stop, show text in field, send to backend. */
   const toggleVoiceInput = useCallback(() => {
     setVoiceError(null);
     const Ctor = speechRecognitionCtor();
-    if (!Ctor || working) {
-      if (!Ctor) setVoiceError("Voice input needs Chrome, Edge, or Safari.");
-      return;
-    }
 
     if (listeningIntentRef.current && recRef.current) {
       const rec = recRef.current;
       listeningIntentRef.current = false;
+      voiceStopRequestedRef.current = true;
+      setListening(false);
       try {
         rec.stop();
       } catch {
         /* ignore */
       }
-      recRef.current = null;
-      setListening(false);
-      window.setTimeout(() => {
-        const joined = voiceChunksRef.current.join(" ").replace(/\s+/g, " ").trim();
-        voiceChunksRef.current = [];
-        if (joined) void sendMessage(joined);
-      }, 200);
+      /* Final transcript is flushed in onend (after the engine posts final onresult). */
       return;
     }
 
+    if (!Ctor) {
+      setVoiceError("Voice input needs Chrome, Edge, or Safari.");
+      return;
+    }
+    if (working) {
+      setVoiceError("Wait for the current reply to finish, then use the mic.");
+      return;
+    }
+
+    cancelSpeech();
+
     listeningIntentRef.current = true;
     voiceChunksRef.current = [];
+    lastInterimRef.current = "";
     const rec = new Ctor();
     rec.lang = recognitionLangForMode(speechMode);
     rec.continuous = true;
-    rec.interimResults = false;
+    rec.interimResults = true;
 
     rec.onresult = (ev: SpeechRecognitionEvent) => {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const row = ev.results[i];
-        if (!row?.isFinal || !row[0]) continue;
-        const part = row[0].transcript.trim();
-        if (part) voiceChunksRef.current.push(part);
+        if (!row?.[0]) continue;
+        const raw = row[0].transcript.trim();
+        if (!raw) continue;
+        if (row.isFinal) {
+          voiceChunksRef.current.push(raw);
+          lastInterimRef.current = "";
+        } else {
+          lastInterimRef.current = raw;
+        }
       }
     };
 
     rec.onerror = (ev: SpeechRecognitionErrorEvent) => {
       if (ev.error === "aborted") return;
       listeningIntentRef.current = false;
+      voiceStopRequestedRef.current = false;
       voiceChunksRef.current = [];
+      lastInterimRef.current = "";
       setVoiceError(
         ev.error === "not-allowed"
           ? "Microphone permission denied."
@@ -209,6 +225,26 @@ export default function App() {
     };
 
     rec.onend = () => {
+      if (voiceStopRequestedRef.current) {
+        voiceStopRequestedRef.current = false;
+        window.setTimeout(() => {
+          let joined = voiceChunksRef.current.join(" ").trim();
+          const tail = lastInterimRef.current.trim();
+          if (tail) joined = joined ? `${joined} ${tail}` : tail;
+          joined = joined.replace(/\s+/g, " ").trim();
+          voiceChunksRef.current = [];
+          lastInterimRef.current = "";
+          recRef.current = null;
+          setListening(false);
+          if (joined) {
+            setInput(joined);
+            void sendMessage(joined).finally(() => setInput(""));
+          } else {
+            setVoiceError("No speech was recognized. Try again or type your question.");
+          }
+        }, 150);
+        return;
+      }
       if (!listeningIntentRef.current) {
         setListening(false);
         recRef.current = null;
@@ -291,9 +327,8 @@ export default function App() {
               value={speechMode}
               onChange={(e) => setSpeechMode(e.target.value as VoiceUiLang)}
               disabled={working}
-              title="Auto: STT follows browser locale; spoken replies match detected Arabic/English text."
+              title="English: mic and read-aloud use English. العربية: Arabic for both."
             >
-              <option value="auto">Auto (EN/AR)</option>
               <option value="en">English</option>
               <option value="ar">العربية</option>
             </select>
