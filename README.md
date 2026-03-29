@@ -80,7 +80,7 @@ Fill `.env` values:
 streamlit run app.py
 ```
 
-Open the local Streamlit URL shown in terminal.
+Open the local Streamlit URL shown in terminal. The Streamlit UI is **text chat only**. For voice input and read-aloud, use the **React app** in `web/` (see `web/README.md`).
 
 ## 3) Expected backend contract
 
@@ -112,4 +112,12 @@ Optional source keys:
 
 Edit `cloudflare_client.py` inside `ask()` to match your exact Cloudflare agent API format.
 
-hello
+## 5) Deploy the React app (`web/`) on Vercel
+
+This repo root is **Python + Streamlit**; the Vite/React app lives in **`web/`** (that folder has `package.json`).
+
+If Vercel runs `npm run build` at the repo root, the build fails with **ENOENT / no package.json** because there is no `package.json` at the root.
+
+**Fix:** In the Vercel project, open **Settings → General → Root Directory**, set it to **`web`**, save, then **Redeploy**. Add environment variables (`CLOUDFLARE_AGENT_URL`, `CLOUDFLARE_API_TOKEN`, etc.) in **Settings → Environment Variables** as described in `web/README.md`.
+
+Do **not** deploy the Streamlit app to Vercel for this chat UI; use the `web` app or run Streamlit locally / on another host.

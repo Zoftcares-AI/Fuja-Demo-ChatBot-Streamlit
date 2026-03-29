@@ -6,6 +6,7 @@ Professional chat UI for the same Cloudflare Worker backend used by the Streamli
 - Character reveal animation (matches Streamlit chunk timing)
 - Markdown answers + **References** collapsible (sources)
 - `formatAssistantMarkdown` parity with the Python app
+- **Voice (browser):** enable **Voice input** and/or **Read replies aloud** in the header; choose **English** or **العربية**. Uses the Web Speech API (Chrome / Edge recommended; HTTPS required on Vercel).
 
 ## Security
 
@@ -25,14 +26,25 @@ The Worker token stays **server-side**. The browser only calls `/api/chat` and `
 
 ## Local development
 
-From `web/`:
+Install dependencies from `web/`:
 
 ```bash
+cd web
 npm install
+```
+
+Create `.env.local` in **`web/`** with the same variables as `.env.example`.
+
+**Run `vercel dev` from the repository root** (`fuja-chatbot`, parent of `web/`), not from inside `web/`:
+
+```bash
+cd ..   # repo root, if you are in web/
 npx vercel dev
 ```
 
-Create `.env.local` in **`web/`** with the same variables as `.env.example`. Run **`npx vercel dev` from inside `web/`** (not the repo root) so the CLI sees `api/` and your env file.
+If your Vercel project has **Settings → General → Root Directory = `web`** (as in deploy instructions), the CLI already enters `web` for you. Starting it from `web/` makes it look for `web/web` and fails with `web/web doesn't exist`.
+
+If you prefer to run the CLI only from `web/`, set **Root Directory** to empty in the Vercel project (advanced) or use a separate link — the usual setup for this monorepo is **root directory `web` + `vercel dev` from repo root**.
 
 **Important:** Variables in `.env.local` exist only on your machine. **They are not used by your live Vercel deployment** unless you also add them under Vercel → Project → Settings → Environment Variables and redeploy.
 

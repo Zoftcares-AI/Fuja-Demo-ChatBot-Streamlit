@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { formatAssistantMarkdown } from "../lib/formatAssistantMarkdown";
 import type { StreamSpeed } from "../lib/chatApi";
@@ -22,7 +23,8 @@ export function AssistantMessage({
   const full = formatAssistantMarkdown(content);
   const showAnimated = animateReveal && streamSpeed !== "Fast";
   const [len, setLen] = useState(0);
-  const text = showAnimated ? full.slice(0, len) : full;
+  const streamingPlain = showAnimated ? full.slice(0, len) : full;
+  const revealDone = !showAnimated || len >= full.length;
 
   useEffect(() => {
     if (!animateReveal) return;
@@ -38,10 +40,14 @@ export function AssistantMessage({
 
     const start = () => {
       if (cancelled) return;
-      setLen(0);
-      let pos = 0;
+      let pos = Math.min(chunkSize, full.length);
+      setLen(pos);
       const step = () => {
         if (cancelled) return;
+        if (pos >= full.length) {
+          onRevealComplete?.();
+          return;
+        }
         pos = Math.min(pos + chunkSize, full.length);
         setLen(pos);
         if (pos < full.length) {
@@ -50,7 +56,11 @@ export function AssistantMessage({
           onRevealComplete?.();
         }
       };
-      step();
+      if (pos < full.length) {
+        window.setTimeout(step, delayMs);
+      } else {
+        onRevealComplete?.();
+      }
     };
 
     const tid = window.setTimeout(start, 0);
@@ -75,9 +85,13 @@ export function AssistantMessage({
           <circle cx="20" cy="11" r="1.2" fill="currentColor" />
         </svg>
       </div>
-      <div className="msg-body">
+      <div className="msg-body assistant-msg-body">
         <div className="markdown-body" aria-live="polite">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          {revealDone ? (
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{full}</ReactMarkdown>
+          ) : (
+            <div className="assistant-stream-plain">{streamingPlain}</div>
+          )}
         </div>
         {sources && sources.length > 0 && (
           <details className="refs">

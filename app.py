@@ -97,6 +97,32 @@ st.markdown(
     div[data-testid="stChatMessage"] li > ul, div[data-testid="stChatMessage"] li > ol {
         margin-top: 0.25rem;
     }
+    div[data-testid="stChatMessage"] pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 0.65rem 0.75rem;
+        border-radius: 10px;
+        overflow-x: auto;
+        font-size: 0.82rem;
+    }
+    div[data-testid="stChatMessage"] blockquote {
+        border-left: 3px solid #cbd5e1;
+        margin: 0.5rem 0;
+        padding-left: 0.75rem;
+        color: #475569;
+    }
+    div[data-testid="stChatMessage"] table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.86rem;
+        margin: 0.5rem 0;
+    }
+    div[data-testid="stChatMessage"] th, div[data-testid="stChatMessage"] td {
+        border: 1px solid #e2e8f0;
+        padding: 0.35rem 0.5rem;
+        text-align: left;
+    }
+    div[data-testid="stChatMessage"] th { background: #f8fafc; font-weight: 600; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -142,7 +168,6 @@ if not is_valid:
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
 
 def to_history(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return [{"role": m["role"], "content": m["content"]} for m in messages]
